@@ -4,6 +4,8 @@
 #include <LittleFS.h>
 #include <DHT.h>
 #include <TinyGPS++.h>
+#include <TimeLib.h> 
+
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "AnomalyDetector.h"
@@ -13,8 +15,9 @@
 #define DHT_TYPE DHT22
 DHT dht(DHT_PIN, DHT_TYPE);
 
-const char* ssid = "yourwifi";
-const char* password = "wifipassword";
+// WiFi must be 2G for ESP to connect
+const char* ssid = "";
+const char* password = "";
 
 // --- OBJECTS ---
 WiFiClient espClient;
@@ -22,18 +25,23 @@ PubSubClient mqtt(espClient);
 TinyGPSPlus gps;
 AnomalyDetector tempMonitor(10);
 unsigned long lastMsg = 0;
+unsigned long lastSent = 0;
+const char* logPath = "/logs.csv";
 
 // --- ADAFRUIT IO CONFIG ---
 const char* mqtt_server = "io.adafruit.com";
-const char* mqtt_user   = "adafruit username";
-const char* mqtt_key    = "adafruit key";
-const char* mqtt_feed   = "adafruit feed";
+const char* mqtt_user   = "";
+const char* mqtt_key    = "";
+const char* mqtt_temp_feed   = "";
+const char* mqtt_zScore_feed = "";
+const char* mqtt_location_feed = "";
 
 
+// --- MQTT connect function ---
 void connectMQTT() {
     while (!mqtt.connected()) {
         Serial.print("Attempting MQTT connection...");
-        // Client ID, Username, Password
+        
         if (mqtt.connect("ESP32_Client", mqtt_user, mqtt_key)) {
             Serial.println("connected");
         } else {
@@ -45,6 +53,66 @@ void connectMQTT() {
     }
 }
 
+// --- Log to Flash ---
+// logs data to LittleFS partition on ESP32
+void logToFlash(float temp, float zScore, double latt, double lng, unsigned long time) {
+    File file = LittleFS.open(logPath, FILE_APPEND); 
+    
+    if (!file) {
+        Serial.println("[ERROR] LittleFS: Failed to open file for appending.");
+        return;
+    }
+
+    size_t bytesWritten;
+    if (latt == 0.0 && lng == 0.0) {
+        bytesWritten = file.printf("%.2f,%.2f,-,-\n", temp, zScore);
+    } else {
+        bytesWritten = file.printf("%.2f,%.2f,%.6f,%.6f,%lu\n", temp, zScore, latt, lng, time);
+    }
+
+    if (bytesWritten > 0) {
+        Serial.printf("[SUCCESS] Logged %d bytes to Flash.\n", bytesWritten);
+    } else {
+        Serial.println("[ERROR] LittleFS: Write failed.");
+    }
+
+    file.close(); 
+}
+
+// ---Prints all entries on LittleFS partition
+void dumpLogs() {
+    File file = LittleFS.open(logPath, "r");
+    if (!file) {
+        Serial.println("No log file found.");
+        return;
+    }
+    Serial.println("---CSV_START---");
+    while (file.available()) {
+        Serial.write(file.read());
+    }
+    Serial.println("---CSV_END---");
+    file.close();
+}
+
+// ---Get UnixTime---
+// Returns time from gps is unix format
+
+unsigned long  getUnixTime(){
+    if (gps.date.isValid() && gps.time.isValid()) {
+        tmElements_t tm;
+        tm.Year = CalendarYrToTm(gps.date.year()); // Years since 1970
+        tm.Month = gps.date.month();
+        tm.Day = gps.date.day();
+        tm.Hour = gps.time.hour();
+        tm.Minute = gps.time.minute();
+        tm.Second = gps.time.second();
+
+        unsigned long unixTime = makeTime(tm); // Convert to Unix time
+        return unixTime;
+        } else {return 0;}
+}
+
+
 void setup() {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     Serial.begin(115200);
@@ -52,7 +120,7 @@ void setup() {
     
     Serial.println("\n--- LEVEL 2: WIFI + LOGIC TEST ---");
     
-    // KEEP THE WORKING WIFI SETTINGS
+    // Limit wifi power to avoid brownouts
     WiFi.mode(WIFI_STA);
     WiFi.setTxPower(WIFI_POWER_11dBm); 
     WiFi.begin(ssid, password);
@@ -67,16 +135,15 @@ void setup() {
     Serial.println("\n--- LEVEL 3: FLASH STORAGE TEST ---");
     
     // 1. Try to mount the file system
-    if(!LittleFS.begin(true)) { // 'true' forces a format if it's broken
+    if(!LittleFS.begin(true)) {
         Serial.println("LittleFS Mount Failed!");
     } else {
         Serial.println("LittleFS Mounted Successfully.");
         
-        // 2. Try a test write - this is the "Stress Test"
-        File file = LittleFS.open("/log.csv", FILE_WRITE);
+        File file = LittleFS.open("/logs.csv", "r");
         if(file) {
-            file.println("Testing Flash Write Stability...");
             file.close();
+            Serial.println("Testing Flash Write Stability...");
             Serial.println("Flash Write SUCCESS!");
         } else {
             Serial.println("File Open Failed!");
@@ -102,44 +169,92 @@ void setup() {
     mqtt.setServer(mqtt_server, 1883);
 }
 
+
 void loop() {
-    // 1. Keep MQTT Alive
+
+    //Check for input at the start of loop
+    if (Serial.available() > 0) {
+        char incoming = Serial.read(); // Read the first character sent
+        
+        // Option: 'd' for Dump
+        if (incoming == 'd' || incoming == 'D') {
+            Serial.println("\n[COMMAND] Manual Log Dump Requested...");
+            dumpLogs();
+        }
+        
+        // Option: 'e' for Erase (Careful!)
+        if (incoming == 'e' || incoming == 'E') {
+            Serial.println("\n[WARNING] Formatting LittleFS... All logs will be lost!");
+            LittleFS.format();
+            Serial.println("[SUCCESS] Flash Memory Wiped.");
+        }
+    }
+
+    //Keep MQTT Alive
     if (!mqtt.connected()) {
         connectMQTT();
     }
     mqtt.loop();
 
-    // 2. Feed GPS
+    //Feed GPS
     while (Serial2.available() > 0) {
         gps.encode(Serial2.read());
     }
 
-    // 3. Main Logic (Every 5 seconds)
+    //Main Logic (Every 5 seconds)
     unsigned long now = millis();
     if (now - lastMsg > 5000) {
         lastMsg = now;
 
         float t = dht.readTemperature();
+        float latt = gps.location.lat();
+        float lng = gps.location.lng();
+        unsigned long time = getUnixTime();
         if (!isnan(t)) {
             tempMonitor.update(t);
             float z = tempMonitor.getZscore();
 
-            Serial.printf("Temp: %.1f | Z: %.2f ", t, z);
+            if (!isnan(latt) && !isnan(lng)){
+                Serial.printf("Temp: %.1f | Z: %.2f | Latt: %.6f | Long: %.6f | UnixTime: %lu", t, z, latt, lng, time);
+            } else{
+            Serial.printf("Temp: %.1f | Z: %.2f  -> No GPS fix", t, z);}
             
+            if (now - lastSent > 60000){
+                lastSent = now;
+                Serial.println("\nRoutine Sending to Adafruit\n");
+                if (!isnan(latt) && !isnan(lng)){
+                    String temp_payload = String(t);
+                    String location_payload = "0," +String(latt, 6) + "," + String(lng, 6) + ",0";
+                    String zScore_payload = String(z);
+                    mqtt.publish(mqtt_temp_feed, temp_payload.c_str());
+                    mqtt.publish(mqtt_location_feed, location_payload.c_str());
+                    mqtt.publish(mqtt_zScore_feed, zScore_payload.c_str());
+                    logToFlash(t,z,latt,lng,time);
 
-            // 4. Trigger logic
-            if (tempMonitor.isHotSpot()) {
-                Serial.println(" -> !! HOTSPOT !! Sending to Adafruit...");
-                
-                // Format: "Temp, Lat, Lng"
-                String payload = String(t) + "," + 
-                                 String(gps.location.lat(), 6) + "," + 
-                                 String(gps.location.lng(), 6);
-                
-                mqtt.publish(mqtt_feed, payload.c_str());
-            } else {
-                Serial.println(" -> Normal");
+                }else{
+                    String temp_payload = String(t);
+                    String zScore_payload = String(z);
+                    mqtt.publish(mqtt_temp_feed, temp_payload.c_str());
+                    mqtt.publish(mqtt_zScore_feed, zScore_payload.c_str());
+                    logToFlash(t,z,0.0,0.0,0);
+                }
             }
-        }
+            //Trigger logic
+            if (tempMonitor.isHotSpot()) {
+            Serial.println(" -> !! HOTSPOT !! Sending to Adafruit...");
+                String temp_payload = String(t);
+                String location_payload = "0," +String(latt, 6) + "," + String(lng, 6) + ",0";
+                String zScore_payload = String(z);+ "0.0";
+                mqtt.publish(mqtt_temp_feed, temp_payload.c_str());
+                mqtt.publish(mqtt_location_feed, location_payload.c_str());
+                mqtt.publish(mqtt_zScore_feed, zScore_payload.c_str());
+                logToFlash(t,z,latt,lng, time);
+            } else {
+            Serial.println(" -> Normal");
+            }
+            
+        }   
+    
     }
+
 }
