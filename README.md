@@ -77,9 +77,7 @@ Copy and place the above section into a Secrets.h file in the include folder.
 
 -The custom PCB was designed in KiCad 9.0 with a focus on industrial reliability and RF signal integrity.
 
--Layer Stackup: 2-layer FR4 board with a 1.6mm thickness.
-
--Signal Integrity: Bottom-side ground plane utilized for EMI shielding, with a dedicated 10mm keep-out zone under the ESP32 antenna.
+-Signal Integrity: Bottom-side ground plane utilized for EMI shielding, with a dedicated keep-out zone under the ESP32 antenna.
 
 -Serviceability: Dual 1x15 female headers allow for modular replacement of the ESP32 DevKit without desoldering.
 
