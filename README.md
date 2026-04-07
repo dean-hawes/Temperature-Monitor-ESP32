@@ -37,24 +37,24 @@ Config: Use a secrets file for Wifi, and Adafruit feeds and keys to ensure secur
 
 //---------------------------------------------------------
 
-#ifndef SECRETS_H
-#define SECRETS_H
+#ifndef SECRETS_H<br>
+#define SECRETS_H<br>
 
-#include <Arduino.h>
+#include <Arduino.h><br>
 
 // --- ADAFRUIT IO CONFIG ---
-const char* mqtt_server          = "io.adafruit.com";
-const char* mqtt_user            = "";
-const char* mqtt_key             = "";
-const char* mqtt_temp_feed       = "";
-const char* mqtt_zScore_feed     = "";
-const char* mqtt_location_feed   = "";
+const char* mqtt_server          = "io.adafruit.com";<br>
+const char* mqtt_user            = "";<br>
+const char* mqtt_key             = "";<br>
+const char* mqtt_temp_feed       = "";<br>
+const char* mqtt_zScore_feed     = "";<br>
+const char* mqtt_location_feed   = "";<br>
 
-// WiFi must be 2G for ESP to connect
-const char* ssid                 = "";
-const char* password             = "";
+// WiFi must be 2G for ESP to connect<br>
+const char* ssid                 = "";<br>
+const char* password             = "";<br>
 
-#endif
+#endif<br>
 
 //-------------------------------------------------------------
 
@@ -67,3 +67,21 @@ Copy and place the above section into a Secrets.h file in the include folder.
 
 ## Circtuit Diagram
 
+<img width="801" height="506" alt="image" src="https://github.com/user-attachments/assets/1aa344b5-aa38-4605-93e0-b8e8a483269c" />
+
+## PCB Design
+
+<img width="1182" height="712" alt="image" src="https://github.com/user-attachments/assets/fb36cb89-5c63-4b06-bdde-21ea6ac59bc1" />
+
+## Hardware Design
+
+-The custom PCB was designed in KiCad 9.0 with a focus on industrial reliability and RF signal integrity.
+
+-Layer Stackup: 2-layer FR4 board with a 1.6mm thickness.
+
+-Signal Integrity: Bottom-side ground plane utilized for EMI shielding, with a dedicated 10mm keep-out zone under the ESP32 antenna.
+
+-Serviceability: Dual 1x15 female headers allow for modular replacement of the ESP32 DevKit without desoldering.
+
+
+<img width="1083" height="604" alt="TEMPGPS" src="https://github.com/user-attachments/assets/56ec9acf-df51-48a1-b0af-115c6db7b2e5" />
